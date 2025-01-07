@@ -1,0 +1,10 @@
+#Files
+*.DS_Store
+*.pptx
+
+#Directoies
+**/key
+**/markdown
+**/model
+**/output
+**/css
