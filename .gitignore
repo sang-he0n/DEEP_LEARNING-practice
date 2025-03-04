@@ -2,6 +2,8 @@
 *.DS_Store
 *.pptx
 *.svg
+*.pyc
+*.pth
 
 #Directories
 **/css
@@ -11,3 +13,5 @@
 **/model
 **/module
 **/log
+**/__pycache__
+**/checkpoint
