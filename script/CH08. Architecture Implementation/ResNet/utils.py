@@ -1,26 +1,25 @@
 # 00. Import libraies
 import tqdm
-import numpy as np
-import matplotlib.pyplot as plt
 import sklearn
 import torch
 import models
-# import datasets
 
 # 01. Define `SupervisedLearning` class
 class SupervisedLearning() :
-    def __init__(self, model_nm:str, use_checkpoint_yn:str) :
+    def __init__(self, model_nm:str, use_checkpoint_tf:bool, checkpoint_path:str=None) :
         self.device = self._check_device()
-        self.model_nm = model_nm
-        self.model = models.check_model(model_nm=self.model_nm)
+        self.model = models.check_model(model_nm=model_nm)
         self.criterion = torch.nn.CrossEntropyLoss()
-        self.model, self.init_epoch, self.train_cost_hist, self.best_train_cost, self.val_cost_hist, self.best_val_cost = self._use_checkpoint(
-            use_checkpoint_yn=use_checkpoint_yn, 
+        (self.checkpoint_path, self.model, self.init_epoch, 
+         self.train_cost_hist, self.best_train_cost, 
+         self.val_cost_hist, self.best_val_cost) = self._use_checkpoint(
+            use_checkpoint_tf=use_checkpoint_tf,
+            checkpoint_path=checkpoint_path, 
+            model_nm=model_nm,
             model=self.model,
             device=self.device
         )
         self.model.to(device=self.device)
-        # print('>> Completed loading your network.')
     def _check_device(self) -> torch.device :
         if torch.cuda.is_available() :
             device = torch.device(device='cuda')
@@ -29,15 +28,18 @@ class SupervisedLearning() :
         else :
             device = torch.device(device='cpu') 
         return device
-    def _use_checkpoint(self, use_checkpoint_yn:str, model:torch.nn.Module, device:torch.device) -> tuple : 
+    def _use_checkpoint(self, use_checkpoint_tf:bool, checkpoint_path:str, model_nm:str, model:torch.nn.Module, device:torch.device) -> tuple : 
         init_epoch = 0
         train_cost_hist = []
         best_train_cost = float('inf')
         val_cost_hist = []
         best_val_cost = float('inf')
-        if use_checkpoint_yn.upper() == 'Y' :
+        if use_checkpoint_tf == True : 
+            if checkpoint_path is None : 
+                checkpoint_path = f'checkpoint/{model_nm}Best.pt'
+            print(f'>> Checkpoint Path is "{checkpoint_path}".')
             try : 
-                checkpoint = torch.load(f=f'checkpoint/{self.model_nm}Best.pt', map_location=device)
+                checkpoint = torch.load(f=checkpoint_path, map_location=device)
                 model.load_state_dict(checkpoint['model'])
                 init_epoch = checkpoint['best_epoch']
                 train_cost_hist = checkpoint['train_cost_hist']
@@ -47,33 +49,33 @@ class SupervisedLearning() :
                 print(f'>> Loaded pretrained model successfully.')
                 print(f'  - Best(Last) Epoch={init_epoch}, Best Train Loss={best_train_cost}, Best Validation Loss={best_val_cost}.')
             except : 
-                print(f'>> Loaded model successfully.')
+                print(f'>> Failed to Load pretrained model. Loaded default model.')
                 pass
-        output = (model, init_epoch, train_cost_hist, best_train_cost, val_cost_hist, best_val_cost)
+        else : 
+            pass
+        output = (checkpoint_path, model, init_epoch, train_cost_hist, best_train_cost, val_cost_hist, best_val_cost)
         return output
-    def _split_train_loader(self, loader:torch.utils.data.DataLoader, val_ratio:float) -> tuple :
+    def _split_train_val(self, loader:torch.utils.data.DataLoader, val_ratio:float) -> tuple :
         dataset = loader.dataset
         total_size = len(dataset)
         val_size = int(total_size*val_ratio)
         train_size = total_size - val_size
-        generator = torch.Generator()
-        # generator.manual_seed(seed=seed_num)
-        train_subset, val_subset = torch.utils.data.random_split(dataset=dataset, lengths=[train_size, val_size], generator=generator)
-        train_loader = torch.utils.data.DataLoader(train_subset, batch_size=loader.batch_size, shuffle=True, num_workers=loader.num_workers)
-        val_loader = torch.utils.data.DataLoader(val_subset, batch_size=loader.batch_size, shuffle=False, num_workers=loader.num_workers)
+        train_subset, val_subset = torch.utils.data.random_split(dataset=dataset, lengths=[train_size, val_size])
+        train_loader = torch.utils.data.DataLoader(dataset=train_subset, batch_size=loader.batch_size, shuffle=True)
+        val_loader = torch.utils.data.DataLoader(dataset=val_subset, batch_size=loader.batch_size, shuffle=False)
         output = (train_loader, val_loader)
         return output
     def train(self, train_loader:torch.utils.data.DataLoader, epoch_num:int, learning_rate:float, l2_rate:float) :
         print('>> Training start.')
         optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate, weight_decay=l2_rate)
-        train_loader, val_loader = self._split_train_loader(loader=train_loader, val_ratio=0.3)
+        train_loader, val_loader = self._split_train_val(loader=train_loader, val_ratio=0.3)
         best_epoch = self.init_epoch
         train_batch_len = len(train_loader)
         val_batch_len = len(val_loader)
-        progress_bar = tqdm.trange(self.init_epoch+1, epoch_num+1, dynamic_ncols=True, ascii=True)
+        progress_bar = tqdm.trange(self.init_epoch+1, epoch_num+1)
         for epoch in progress_bar :
-            train_cost = 0.0
             # ---- Train ---- #
+            train_cost = 0.0
             for inputs, targets in train_loader :
                 inputs = inputs.to(device=self.device)
                 targets = targets.to(device=self.device)
@@ -85,12 +87,9 @@ class SupervisedLearning() :
                 train_cost += train_loss.item()
             train_cost = train_cost / train_batch_len
             self.train_cost_hist.append(train_cost)
-            # ---- Check per 10 epochs ---- #
-            # if self.val_cost_hist:
-            #     val_cost = self.val_cost_hist[-1]
-            # else:
-            #     val_cost = 0.0
-            # if epoch % 10 == 0 :
+            # ---- _____ ---- # 
+            
+            # ---- Validation ---- # 
             val_cost = 0.0
             self.model.eval()
             with torch.no_grad() :
@@ -114,9 +113,10 @@ class SupervisedLearning() :
                         'train_cost_hist' : self.train_cost_hist,
                         'val_cost_hist'   : self.val_cost_hist 
                     }, 
-                    f=f'checkpoint/{self.model_nm}Best.pt'
+                    f=self.checkpoint_path
                 )
-            # ---- ____________________ ---- # 
+            # ---- __________ ---- # 
+
             progress_bar.set_postfix(ordered_dict={
                 'last_train_cost' : train_cost, 
                 'last_val_cost'   : val_cost,
@@ -129,14 +129,14 @@ class SupervisedLearning() :
         preds = []
         self.model.eval()
         with torch.no_grad():
-            for inputs, _ in loader :
+            for inputs, labels in loader :
                 inputs = inputs.to(device=self.device)
-                _ = _.to(device=self.device)
+                labels = labels.to(device=self.device)
                 preds.extend(
                     torch.argmax(input=self.model(x=inputs), dim=1).to(device='cpu').numpy()
                 )
                 targets.extend(
-                    _.to(device='cpu').numpy()
+                    labels.to(device='cpu').numpy()
                 )
         accuracy = sklearn.metrics.accuracy_score(y_true=targets, y_pred=preds)
         precision = sklearn.metrics.precision_score(y_true=targets, y_pred=preds, average='weighted', zero_division=0)
