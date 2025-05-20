@@ -13,5 +13,6 @@
 **/model
 **/module
 **/log
+**/temp
 **/__pycache__
 **/checkpoint
